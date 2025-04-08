@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package proto;
+
+option go_package = "slg-game-server/proto";
+
+// 消息类型枚举
+enum MessageType {
+  UNKNOWN = 0;
+  HEARTBEAT = 1;
+  ERROR = 2;
+  TEXT = 3;  // 文本消息类型
+  // 后续添加更多消息类型
+}
+
+// 基础消息结构
+message Message {
+  MessageType type = 1;
+  bytes payload = 2;
+}
+
+// 心跳消息
+message Heartbeat {
+  int64 timestamp = 1;
+}
+
+// 错误消息
+message Error {
+  int32 code = 1;
+  string message = 2;
+}
+
+// 文本消息
+message TextMessage {
+  string content = 1;    // 消息内容
+  int64 timestamp = 2;   // 时间戳
+} 
