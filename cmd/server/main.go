@@ -1,67 +1,100 @@
 package main
 
 import (
-	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-
-	"slg-game-server/internal/network"
+	"time"
 
 	"github.com/anthdm/hollywood/actor"
+	"github.com/cowpeatechnology/slg-game-server/internal/config"
+	"github.com/cowpeatechnology/slg-game-server/internal/game"
+	"github.com/cowpeatechnology/slg-game-server/internal/gateway"
+	"github.com/gorilla/websocket"
 )
 
 func main() {
-	// 创建context用于优雅关闭
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// 创建Hollywood actor系统
-	config := actor.NewEngineConfig()
-	engine, err := actor.NewEngine(config)
+	// Load configuration
+	cfg, err := config.LoadConfig("config/config.json")
 	if err != nil {
-		log.Fatal("Failed to create engine:", err)
+		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// 创建WebSocket Hub
-	hub := network.NewHub(engine)
-	go hub.Run()
+	// Initialize actor engine
+	engine, err := actor.NewEngine(actor.NewEngineConfig())
+	if err != nil {
+		log.Fatalf("Failed to create actor engine: %v", err)
+	}
 
-	// 设置WebSocket路由
-	http.HandleFunc("/ws", hub.HandleWebSocket)
+	// Initialize actors
+	gameActor := engine.Spawn(game.NewGameActor(), "game")
+	combatActor := engine.Spawn(game.NewCombatActor(), "combat")
+	gatewayActor := engine.Spawn(gateway.NewGatewayActor(), "gateway")
 
-	// 启动HTTP服务器
+	// 等待Actor完全启动
+	time.Sleep(100 * time.Millisecond)
+	log.Printf("Actor PIDs started - Game: %v, Combat: %v, Gateway: %v",
+		gameActor, combatActor, gatewayActor)
+
+	// 设置Actor之间的PID引用
+	// 首先发送 GameActor 的 PID 给其他 Actor
+	engine.Send(gatewayActor, gameActor) // Gateway 需要知道 Game 的 PID
+	engine.Send(combatActor, gameActor)  // Combat 需要知道 Game 的 PID
+
+	// 然后发送其他 Actor 的 PID 给 GameActor
+	engine.Send(gameActor, gatewayActor) // Game 需要知道 Gateway 的 PID
+	engine.Send(gameActor, combatActor)  // Game 需要知道 Combat 的 PID
+
+	log.Printf("Actor PIDs exchanged - Game: %v, Combat: %v, Gateway: %v",
+		gameActor, combatActor, gatewayActor)
+
+	// Initialize HTTP server
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+	mux := http.NewServeMux()
+
+	// Create WebSocket upgrader
+	upgrader := &websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	}
+
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Printf("WebSocket upgrade failed: %v", err)
+			return
+		}
+
+		clientID := fmt.Sprintf("%s-%s", r.RemoteAddr, conn.LocalAddr().String())
+		engine.Send(gatewayActor, &gateway.ConnectMessage{
+			ClientID: clientID,
+			Conn:     conn,
+		})
+	})
+
 	server := &http.Server{
-		Addr:    ":8080",
-		Handler: nil, // 使用默认的DefaultServeMux
+		Addr:    addr,
+		Handler: mux,
 	}
 
+	// Start HTTP server
+	log.Printf("Starting gateway service on %s", addr)
 	go func() {
-		log.Println("Starting WebSocket server on :8080")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal("HTTP server error:", err)
+			log.Printf("HTTP server error: %v", err)
 		}
 	}()
 
-	// 等待中断信号
+	// Wait for interrupt signal
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
 
-	// 等待信号
-	select {
-	case <-sigChan:
-		log.Println("Received shutdown signal")
-	case <-ctx.Done():
-		log.Println("Context cancelled")
-	}
-
-	// 优雅关闭
+	// Graceful shutdown
 	log.Println("Shutting down server...")
-
-	// 关闭HTTP服务器
-	if err := server.Shutdown(ctx); err != nil {
-		log.Printf("HTTP server Shutdown: %v", err)
-	}
+	server.Close()
 }

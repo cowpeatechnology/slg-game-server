@@ -1,37 +1,60 @@
 syntax = "proto3";
+package pb;
 
-package proto;
-
-option go_package = "slg-game-server/proto";
-
-// 消息类型枚举
-enum MessageType {
-  UNKNOWN = 0;
-  HEARTBEAT = 1;
-  ERROR = 2;
-  TEXT = 3;  // 文本消息类型
-  // 后续添加更多消息类型
-}
+option go_package = "github.com/cowpeatechnology/slg-game-server/proto";
 
 // 基础消息结构
-message Message {
-  MessageType type = 1;
-  bytes payload = 2;
+message GameMessage {
+    string type = 1;      // 消息类型
+    bytes payload = 2;    // 消息内容
+    string id = 3;       // 用于消息路由，玩家ID
 }
 
-// 心跳消息
-message Heartbeat {
-  int64 timestamp = 1;
+// 玩家数据
+message PlayerData {
+    string id = 1;        // 玩家ID
+    string name = 2;      // 玩家名称
+    int32 level = 3;      // 等级
+    int32 hp = 4;        // 生命值
+    int32 attack = 5;    // 攻击力
+    int32 defense = 6;   // 防御力
 }
 
-// 错误消息
-message Error {
-  int32 code = 1;
-  string message = 2;
+// 玩家列表
+message PlayerList {
+    repeated PlayerData players = 1;
 }
 
-// 文本消息
-message TextMessage {
-  string content = 1;    // 消息内容
-  int64 timestamp = 2;   // 时间戳
+// 登录请求
+message LoginRequest {
+    string username = 1;
+    string password = 2;
+}
+
+// 登录响应
+message LoginResponse {
+    bool success = 1;
+    string message = 2;
+    PlayerData player_info = 3;
+}
+
+// 聊天消息
+message ChatMessage {
+    string from_id = 1;
+    string to_id = 2;
+    string content = 3;
+    int64 timestamp = 4;
+}
+
+// 战斗请求
+message BattleRequest {
+    string attacker_id = 1;  // 攻击者ID
+    string defender_id = 2;  // 防守者ID
+}
+
+// 战斗结果
+message BattleResult {
+    string winner_id = 1;    // 胜利者ID
+    string loser_id = 2;     // 失败者ID
+    int32 damage_dealt = 3;  // 造成的伤害
 } 

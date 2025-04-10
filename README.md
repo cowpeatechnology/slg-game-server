@@ -1,123 +1,218 @@
 # SLG Game Server
 
-基于 Hollywood Actor 框架的 SLG 游戏服务器，使用 WebSocket 和 Protocol Buffers 实现实时通信。
+基于 Actor 模型的简单游戏服务器框架，使用 Go 语言和 Hollywood Actor 框架实现。
+
+## 设计原则
+
+1. **单点写入原则**
+   - 数据只能由特定 Actor 修改
+   - 其他 Actor 通过消息请求修改
+   - 示例：
+     ```go
+     // GameActor 负责管理玩家数据
+     type GameActor struct {
+         engine     *actor.Engine
+         players    map[string]*pb.PlayerData
+         combatPID  *actor.PID
+     }
+
+     // 其他 Actor 通过消息请求修改数据
+     engine.Send(gameActor, &pb.GameMessage{
+         Type: "update_player",
+         Payload: playerData,
+     })
+     ```
+
+2. **简单的消息流转**
+   ```
+   Client -> WebSocket -> GatewayActor -> GameActor/CombatActor
+   ```
+   - WebSocket 连接在基础设施层处理
+   - GatewayActor 只负责消息路由
+   - GameActor 和 CombatActor 处理具体业务逻辑
+
+3. **数据存储**
+   - 直接使用 Redis 存储
+   - 简单的 CRUD 操作
+   - 无需复杂的事务处理
 
 ## 项目结构
 
 ```
 .
-├── cmd/                    # 主程序入口
-│   └── server/            # 服务器入口
-│       └── main.go        # 主程序
-├── internal/              # 内部包
-│   ├── network/          # 网络相关
-│   │   └── websocket.go  # WebSocket 处理
-├── proto/                 # Protocol Buffers 定义
-│   ├── message.proto     # 消息协议定义
-│   └── message.pb.go     # 生成的 Go 代码
-└── test/                 # 测试相关
-    └── test.html         # WebSocket 客户端测试页面
+├── cmd/
+│   └── server/
+│       └── main.go           # 服务器入口，初始化组件
+├── config/
+│   └── config.json          # 基础配置（服务器、Redis）
+├── internal/
+│   ├── config/
+│   │   └── config.go        # 配置加载和管理
+│   ├── game/
+│   │   ├── game_actor.go    # 游戏核心逻辑
+│   │   └── combat_actor.go  # 战斗系统
+│   ├── gateway/
+│   │   └── gateway_actor.go # 消息路由和WebSocket连接管理
+│   └── storage/
+│       ├── redis.go         # Redis 存储实现
+│       ├── storage.go       # 存储接口定义
+│       └── storage_actor.go # 存储 Actor
+├── proto/
+│   ├── message.proto        # 消息协议定义
+│   └── message.pb.go        # 生成的代码
+└── test/
+    └── client.html          # 测试客户端
 ```
 
-## 技术栈
+## 核心组件
+
+### 1. Gateway Actor
+```go
+// 简单的消息路由
+type GatewayActor struct {
+    engine    *actor.Engine
+    clients   sync.Map
+    gameActor *actor.PID
+}
+
+// 转发消息到对应的 Actor
+func (a *GatewayActor) handleMessage(msg *pb.GameMessage) {
+    a.engine.Send(a.gameActor, msg)
+}
+```
+
+### 2. Game Actor
+```go
+// 游戏核心逻辑
+type GameActor struct {
+    engine     *actor.Engine
+    players    map[string]*pb.PlayerData
+    combatPID  *actor.PID
+}
+
+// 处理玩家数据和游戏逻辑
+func (a *GameActor) handlePlayerJoin(msg *pb.GameMessage) {
+    // 处理玩家加入逻辑
+}
+```
+
+### 3. Combat Actor
+```go
+// 战斗系统
+type CombatActor struct {
+    engine    *actor.Engine
+    gamePID   *actor.PID
+    battles   map[string]*pb.BattleResult
+}
+
+// 处理战斗逻辑
+func (a *CombatActor) handleBattle(msg *pb.GameMessage) {
+    // 处理战斗逻辑
+}
+```
+
+## 数据结构
+
+```protobuf
+// 统一的玩家数据结构
+message PlayerData {
+    string id = 1;
+    string name = 2;
+    int32 level = 3;
+    int32 hp = 4;
+    int32 attack = 5;
+    int32 defense = 6;
+}
+
+// 游戏消息
+message GameMessage {
+    string type = 1;
+    bytes payload = 2;
+    string id = 3;
+}
+```
+
+## 开发环境要求
 
 - Go 1.21+
-- Hollywood Actor Framework
-- WebSocket
-- Protocol Buffers
-- HTML/JavaScript (测试客户端)
+- Redis 6.0+
+- hollywood v1.0.5
+- protoc v4.25.3+
 
-## 消息协议
+## 快速开始
 
-使用 Protocol Buffers 定义消息格式，支持以下消息类型：
-
-1. 心跳消息 (HEARTBEAT)
-   - 用于保持连接活跃
-   - 包含时间戳字段
-
-2. 文本消息 (TEXT)
-   - 用于发送文本内容
-   - 包含消息内容和时间戳
-
-3. 错误消息 (ERROR)
-   - 用于错误处理
-   - 包含错误码和错误信息
-
-## WebSocket 通信
-
-### 服务器端
-
-- 端口：8080
-- 路径：/ws
-- 支持多客户端连接
-- 实现消息广播机制
-
-### 客户端
-
-- 使用原生 WebSocket API
-- 集成 protobuf.js 处理消息
-- 支持自动重连
-- 实现消息发送和接收展示
-
-## 开发环境设置
-
-1. 安装依赖：
+1. 安装依赖
 ```bash
-go mod download
+go mod tidy
 ```
 
-2. 安装 Protocol Buffers 编译器：
-```bash
-# macOS
-brew install protobuf
-# 或其他平台对应的安装方式
-```
-
-3. 安装 Go Protocol Buffers 插件：
-```bash
-go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-```
-
-## 构建和运行
-
-1. 生成 Protocol Buffers 代码：
+2. 生成 protobuf 代码
 ```bash
 protoc --go_out=. --go_opt=paths=source_relative proto/message.proto
 ```
 
-2. 运行服务器：
+3. 启动服务器
 ```bash
 go run cmd/server/main.go
 ```
 
-3. 运行测试客户端：
-   - 使用任意 Web 服务器托管 test/test.html
-   - 或直接在浏览器中打开 test.html
+4. 测试
+- 打开 `test/client.html` 进行测试
+- 使用 WebSocket 连接到服务器
+- 发送消息测试功能
 
-## 测试
+## 消息流程示例
 
-1. 打开测试客户端页面
-2. 点击"连接"按钮连接到服务器
-3. 可以发送文本消息或观察心跳
-4. 打开多个客户端测试消息广播功能
+1. **玩家加入游戏**
+```
+Client -> GatewayActor -> GameActor
+- GatewayActor 记录客户端连接
+- GameActor 创建/加载玩家数据
+```
+
+2. **战斗请求**
+```
+Client -> GatewayActor -> GameActor -> CombatActor
+- GameActor 验证玩家状态
+- CombatActor 处理战斗逻辑
+- 结果通过相同路径返回
+```
 
 ## 注意事项
 
-1. 生产环境部署时需要：
-   - 配置适当的 CORS 策略
-   - 添加安全验证机制
-   - 实现完整的错误处理
-   - 添加日志记录
+1. **Actor 通信**
+   - 始终通过 PID 发送消息
+   - 不要在 Actor 之间直接调用方法
+   - 保持消息处理的异步性
 
-2. 开发建议：
-   - 遵循 Proto 文件定义的消息格式
-   - 注意处理断线重连
-   - 实现适当的错误处理机制
+2. **数据处理**
+   - GameActor 是玩家数据的唯一修改者
+   - 使用 Redis 进行简单的数据持久化
+   - 避免复杂的数据查询操作
 
-## 贡献
+3. **错误处理**
+   - 记录关键错误日志
+   - 保持系统稳定性
+   - 优雅处理连接断开
 
-欢迎提交 Issue 和 Pull Request。
+## 调试建议
 
-## 许可证
+1. 使用日志跟踪消息流转
+2. 监控 Redis 连接状态
+3. 使用测试客户端验证功能
 
-[MIT License](LICENSE) 
+## 部署
+
+1. 准备环境
+   - 配置 Redis
+   - 设置配置文件
+
+2. 构建
+```bash
+go build -o server cmd/server/main.go
+```
+
+3. 运行
+```bash
+./server
+``` 

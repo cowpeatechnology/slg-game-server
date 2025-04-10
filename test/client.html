@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>Game Client</title>
+    <script src="https://cdn.jsdelivr.net/npm/protobufjs@7.2.5/dist/protobuf.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+
+        #messages {
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+
+        #playerList {
+            float: right;
+            width: 200px;
+            border: 1px solid #ccc;
+            padding: 10px;
+        }
+
+        .message {
+            margin: 5px 0;
+            padding: 5px;
+            border-radius: 5px;
+        }
+
+        .system {
+            background-color: #f0f0f0;
+        }
+
+        .chat {
+            background-color: #e8f5e9;
+        }
+
+        .battle {
+            background-color: #fff3e0;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="playerList">
+        <h3>在线玩家</h3>
+        <ul id="players"></ul>
+    </div>
+
+    <div>
+        <h3>游戏控制台</h3>
+        <div>
+            <input type="text" id="username" placeholder="用户名">
+            <button onclick="login()">登录</button>
+        </div>
+        <div id="messages"></div>
+        <div>
+            <input type="text" id="message" placeholder="输入消息">
+            <button onclick="sendChat()">发送</button>
+        </div>
+        <div>
+            <input type="text" id="targetPlayer" placeholder="目标玩家ID">
+            <button onclick="battle()">发起战斗</button>
+        </div>
+    </div>
+
+    <script>
+        let ws;
+        let playerID = '';
+        let root = null;
+        let GameMessage;
+        let PlayerData;
+
+        // 加载 protobuf 定义
+        protobuf.load("../proto/message.proto", function (err, r) {
+            if (err) {
+                console.error("Failed to load proto:", err);
+                return;
+            }
+            root = r;
+            GameMessage = root.lookupType("pb.GameMessage");
+            PlayerData = root.lookupType("pb.PlayerData");
+
+            // 加载完成后连接服务器
+            connect();
+        });
+
+        function connect() {
+            ws = new WebSocket('ws://localhost:8080/ws');
+            ws.binaryType = 'arraybuffer';
+
+            ws.onopen = function () {
+                addMessage('系统', '连接成功');
+                console.log('WebSocket connected');
+            };
+
+            ws.onclose = function () {
+                addMessage('系统', '连接断开');
+                console.log('WebSocket disconnected');
+            };
+
+            ws.onmessage = function (e) {
+                try {
+                    const data = new Uint8Array(e.data);
+                    const message = GameMessage.decode(data);
+                    console.log('Received message:', message);
+                    handleMessage(message);
+                } catch (error) {
+                    console.error('Failed to decode message:', error);
+                    addMessage('系统', '消息解析错误');
+                }
+            };
+
+            ws.onerror = function (error) {
+                console.error('WebSocket error:', error);
+                addMessage('系统', '连接错误');
+            };
+        }
+
+        function login() {
+            if (!root) {
+                addMessage('系统', 'Protobuf 定义尚未加载完成');
+                return;
+            }
+
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addMessage('系统', '未连接到服务器');
+                return;
+            }
+
+            const username = document.getElementById('username').value;
+            if (!username) {
+                alert('请输入用户名');
+                return;
+            }
+
+            const message = {
+                type: 'player_join',
+                id: '',
+                payload: new TextEncoder().encode(JSON.stringify({
+                    name: username
+                }))
+            };
+
+            const buffer = GameMessage.encode(GameMessage.create(message)).finish();
+            ws.send(buffer);
+        }
+
+        function sendChat() {
+            const message = document.getElementById('message').value;
+            if (!message || !playerID) {
+                alert('请先登录并输入消息');
+                return;
+            }
+
+            const chatMessage = {
+                type: 'chat',
+                id: playerID,
+                payload: new TextEncoder().encode(message)
+            };
+
+            const buffer = GameMessage.encode(GameMessage.create(chatMessage)).finish();
+            ws.send(buffer);
+            document.getElementById('message').value = '';
+        }
+
+        function battle() {
+            const targetID = document.getElementById('targetPlayer').value;
+            if (!targetID || !playerID) {
+                alert('请先登录并选择目标玩家');
+                return;
+            }
+
+            const battleRequest = {
+                type: 'battle_request',
+                id: playerID,
+                payload: new TextEncoder().encode(JSON.stringify({
+                    attacker_id: playerID,
+                    defender_id: targetID
+                }))
+            };
+
+            const buffer = GameMessage.encode(GameMessage.create(battleRequest)).finish();
+            ws.send(buffer);
+            addMessage('系统', `发起对 ${targetID} 的战斗请求`);
+        }
+
+        function handleMessage(message) {
+            console.log('收到消息:', message);
+
+            switch (message.type) {
+                case 'player_join_response':
+                    handlePlayerJoinResponse(message);
+                    break;
+                case 'chat_response':
+                    handleChatResponse(message);
+                    break;
+                case 'battle_result':
+                    handleBattleResult(message);
+                    break;
+                case 'error':
+                    handleError(message);
+                    break;
+                default:
+                    console.log('未知消息类型:', message.type);
+            }
+        }
+
+        function handlePlayerJoinResponse(message) {
+            try {
+                const data = JSON.parse(new TextDecoder().decode(message.payload));
+                playerID = data.id;
+                addMessage('系统', `登录成功，玩家ID: ${playerID}`);
+            } catch (error) {
+                console.error('Failed to parse player join response:', error);
+            }
+        }
+
+        function handleChatResponse(message) {
+            try {
+                const data = JSON.parse(new TextDecoder().decode(message.payload));
+                const chatMessage = `${data.sender_name}: ${data.content}`;
+                addMessage('聊天', chatMessage);
+            } catch (error) {
+                console.error('解析聊天消息失败:', error);
+            }
+        }
+
+        function handleBattleResult(message) {
+            try {
+                const data = JSON.parse(new TextDecoder().decode(message.payload));
+                const battleMessage = `战斗结果: ${data.winner_id} 击败了 ${data.loser_id}，造成 ${data.damage_dealt} 点伤害`;
+                addMessage('战斗', battleMessage);
+            } catch (error) {
+                console.error('解析战斗结果失败:', error);
+            }
+        }
+
+        function handleError(message) {
+            const error = new TextDecoder().decode(message.payload);
+            addMessage('错误', `${message.type}: ${error}`);
+        }
+
+        function addMessage(type, content) {
+            const messages = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type.toLowerCase()}`;
+            messageDiv.textContent = `[${type}] ${content}`;
+            messages.appendChild(messageDiv);
+            messages.scrollTop = messages.scrollHeight;
+        }
+    </script>
+</body>
+
+</html>
